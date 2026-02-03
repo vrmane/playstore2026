@@ -21,15 +21,16 @@ APPS = [
 def trigger_gemini_classification():
     client = bigquery.Client(project=PROJECT_ID, location=LOCATION)
     
-    # We now explicitly select CURRENT_TIMESTAMP() for the new column
+    # Matches your sequence: reviewId, content, processing_timestamp, ai_processed_timestamp, ai_output
     sql_query = r"""
     INSERT INTO `playstore2026.play_store_data.app_reviews_ai` 
-    (reviewId, ai_output, processing_timestamp, ai_processed_timestamp)
+    (reviewId, content, processing_timestamp, ai_processed_timestamp, ai_output)
     SELECT 
       reviewId, 
-      ml_generate_text_llm_result AS ai_output,
-      CURRENT_TIMESTAMP(), -- Existing column
-      CURRENT_TIMESTAMP()  -- New specific processed timestamp
+      content,
+      CURRENT_TIMESTAMP(), -- processing_timestamp
+      CURRENT_TIMESTAMP(), -- ai_processed_timestamp
+      ml_generate_text_llm_result AS ai_output
     FROM ML.GENERATE_TEXT(
       MODEL `playstore2026.play_store_data.gemini_flash_model`,
       (
@@ -684,7 +685,7 @@ Output: UPI, Negative, Unable to add bank account
 Example 36
 Statement: “KreditBee. good service fast, so happy with smile service”
 Output: Generic, Positive, Quick/Fast Process]''', 
- "\nReview: ", content
+"\nReview: ", content
         ) AS prompt
         FROM `playstore2026.play_store_data.app_reviews` AS raw
         WHERE NOT EXISTS (
@@ -704,7 +705,16 @@ Output: Generic, Positive, Quick/Fast Process]''',
         print("🤖 Starting Gemini 2.5 Flash Classification...")
         query_job = client.query(sql_query)
         query_job.result()
-        print(f"✅ AI Processed {query_job.num_dml_affected_rows} new reviews.")
+        
+        # Verify sync status
+        check_sql = f"""
+            SELECT 
+                (SELECT COUNT(*) FROM `{PROJECT_ID}.{DATASET_ID}.app_reviews`) as total_raw,
+                (SELECT COUNT(*) FROM `{PROJECT_ID}.{DATASET_ID}.app_reviews_ai`) as total_ai
+        """
+        counts = list(client.query(check_sql).result())[0]
+        print(f"📊 Sync Status -> Raw Table: {counts.total_raw} | AI Table: {counts.total_ai}")
+        
     except Exception as e:
         print(f"❌ AI Classification Failed: {e}")
 
