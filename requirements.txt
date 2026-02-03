@@ -1,0 +1,4 @@
+google-play-scraper
+pandas
+google-cloud-bigquery
+pyarrow
