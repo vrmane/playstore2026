@@ -23,11 +23,11 @@ APPS = [
 def scrape_all_apps():
     """
     Scrapes Google Play Store reviews, filters for recent days (IST),
-    and performs a deduplicated MERGE into BigQuery.
+    and performs a deduplicated MERGE into BigQuery with correct types.
     """
     client = bigquery.Client(project=PROJECT_ID, location=LOCATION)
     
-    # Define a 3-day lookback window in IST to ensure no data gap
+    # Define window in IST
     now_ist = datetime.now(IST)
     three_days_ago = (now_ist - timedelta(days=3)).date()
     
@@ -39,7 +39,6 @@ def scrape_all_apps():
     for app in APPS:
         print(f"🔍 Fetching reviews for {app['name']}...")
         try:
-            # Scrape latest 500 reviews
             result, _ = reviews(
                 app['id'],
                 lang='en',
@@ -49,57 +48,57 @@ def scrape_all_apps():
             )
 
             if not result:
-                print(f"⚠️ No raw data returned for {app['name']}")
                 continue
 
             df = pd.DataFrame(result)
             
-            # Convert Play Store UTC timestamps to IST for accurate filtering
+            # Convert to IST
             df['at'] = pd.to_datetime(df['at']).dt.tz_localize('UTC').dt.tz_convert(IST)
             df['app_name'] = app['name']
             
-            # Filter: Date >= 3 days ago AND content length >= 30 chars
             mask = (df['at'].dt.date >= three_days_ago) & (df['content'].str.len() >= 30)
             df_filtered = df[mask].copy()
             
             if not df_filtered.empty:
-                # Format timestamp for BigQuery (remove timezone info for cleaner storage)
-                df_filtered['at'] = df_filtered['at'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                # IMPORTANT: Keep 'at' as a datetime object (naive for BigQuery TIMESTAMP)
+                df_filtered['at'] = df_filtered['at'].dt.tz_localize(None)
                 all_new_reviews.append(df_filtered)
                 print(f"✅ Found {len(df_filtered)} valid reviews for {app['name']}.")
-            else:
-                print(f"ℹ️ Found reviews, but 0 matched the date/length filter.")
 
         except Exception as e:
             print(f"❌ Error scraping {app['name']}: {e}")
 
     if not all_new_reviews:
-        print("🛑 No new reviews passed the filters. Ending job.")
+        print("🛑 No new reviews passed the filters.")
         return
 
     # 1. Combine and Local Deduplication
     final_df = pd.concat(all_new_reviews, ignore_index=True)
-    # Remove duplicates within this batch based on reviewId
     final_df = final_df.drop_duplicates(subset=['reviewId'])
     
-    # Add ingestion timestamp
-    final_df['review_added_timestamp'] = now_ist.strftime('%Y-%m-%d %H:%M:%S')
+    # 2. Add Ingestion Timestamp as a DATETIME OBJECT (not a string)
+    # Removing timezone info ensures BigQuery maps it to TIMESTAMP correctly
+    final_df['review_added_timestamp'] = now_ist.replace(tzinfo=None)
 
-    # 2. Upload to Staging Table
+    # 3. Upload to Staging Table
     staging_table_id = f"{PROJECT_ID}.{DATASET_ID}.temp_staging_reviews"
-    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE", autodetect=True)
+    
+    # Explicitly set the schema to ensure 'at' and 'review_added_timestamp' are TIMESTAMPS
+    job_config = bigquery.LoadJobConfig(
+        write_disposition="WRITE_TRUNCATE",
+        schema=[
+            bigquery.SchemaField("at", "TIMESTAMP"),
+            bigquery.SchemaField("review_added_timestamp", "TIMESTAMP"),
+        ],
+        autodetect=True 
+    )
 
     try:
-        print(f"📤 Uploading {len(final_df)} unique reviews to staging table...")
-        load_job = client.load_table_from_dataframe(
-            final_df, 
-            staging_table_id, 
-            job_config=job_config
-        )
+        print(f"📤 Uploading {len(final_df)} unique reviews to staging...")
+        load_job = client.load_table_from_dataframe(final_df, staging_table_id, job_config=job_config)
         load_job.result()
         
-        # 3. MERGE into Main Table
-        # CRITICAL FIX: Added backticks around `at` because it is a reserved keyword in SQL.
+        # 4. MERGE into Main Table
         merge_sql = f"""
         MERGE `{TABLE_ID}` T
         USING `{staging_table_id}` S
@@ -109,17 +108,16 @@ def scrape_all_apps():
           VALUES (S.reviewId, S.content, S.score, S.at, S.app_name, S.review_added_timestamp)
         """
         
-        print("🔗 Merging unique reviews into main table...")
+        print("🔗 Executing deduplicated MERGE...")
         query_job = client.query(merge_sql)
         query_job.result()
         
-        # Cleanup staging table
+        # Cleanup
         client.delete_table(staging_table_id, not_found_ok=True)
-        
-        print(f"🎉 SUCCESS! Added {query_job.num_dml_affected_rows} new unique reviews to BigQuery.")
+        print(f"🎉 SUCCESS! Ingested {query_job.num_dml_affected_rows} unique reviews.")
         
     except Exception as e:
-        print(f"🔥 BigQuery Workflow Failed: {e}")
+        print(f"🔥 Workflow Failed: {e}")
 
 if __name__ == "__main__":
     scrape_all_apps()
