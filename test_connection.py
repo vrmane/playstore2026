@@ -7,7 +7,7 @@ import os
 def verify_setup():
     PROJECT_ID = 'playstore2026'
     LOCATION = 'asia-south1'
-    DATASET_ID = 'playstore_data'
+    DATASET_ID = 'play_store_data'
     
     client = bigquery.Client(project=PROJECT_ID, location=LOCATION)
     
