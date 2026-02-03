@@ -52,7 +52,7 @@ def scrape_all_apps():
 
             df = pd.DataFrame(result)
             
-            # Convert to IST
+            # Convert to IST for accurate FILTERING
             df['at'] = pd.to_datetime(df['at']).dt.tz_localize('UTC').dt.tz_convert(IST)
             df['app_name'] = app['name']
             
@@ -60,8 +60,8 @@ def scrape_all_apps():
             df_filtered = df[mask].copy()
             
             if not df_filtered.empty:
-                # IMPORTANT: Keep 'at' as a datetime object (naive for BigQuery TIMESTAMP)
-                df_filtered['at'] = df_filtered['at'].dt.tz_localize(None)
+                # FIX: Convert 'at' back to STRING to match your BigQuery table schema
+                df_filtered['at'] = df_filtered['at'].dt.strftime('%Y-%m-%d %H:%M:%S')
                 all_new_reviews.append(df_filtered)
                 print(f"✅ Found {len(df_filtered)} valid reviews for {app['name']}.")
 
@@ -76,18 +76,17 @@ def scrape_all_apps():
     final_df = pd.concat(all_new_reviews, ignore_index=True)
     final_df = final_df.drop_duplicates(subset=['reviewId'])
     
-    # 2. Add Ingestion Timestamp as a DATETIME OBJECT (not a string)
-    # Removing timezone info ensures BigQuery maps it to TIMESTAMP correctly
+    # 2. Add Ingestion Timestamp as a DATETIME OBJECT (for the TIMESTAMP column)
     final_df['review_added_timestamp'] = now_ist.replace(tzinfo=None)
 
     # 3. Upload to Staging Table
     staging_table_id = f"{PROJECT_ID}.{DATASET_ID}.temp_staging_reviews"
     
-    # Explicitly set the schema to ensure 'at' and 'review_added_timestamp' are TIMESTAMPS
+    # FIX: Explicitly tell BigQuery that 'at' is a STRING and 'review_added_timestamp' is a TIMESTAMP
     job_config = bigquery.LoadJobConfig(
         write_disposition="WRITE_TRUNCATE",
         schema=[
-            bigquery.SchemaField("at", "TIMESTAMP"),
+            bigquery.SchemaField("at", "STRING"), 
             bigquery.SchemaField("review_added_timestamp", "TIMESTAMP"),
         ],
         autodetect=True 
@@ -99,6 +98,7 @@ def scrape_all_apps():
         load_job.result()
         
         # 4. MERGE into Main Table
+        # Using backticks around `at` just in case
         merge_sql = f"""
         MERGE `{TABLE_ID}` T
         USING `{staging_table_id}` S
