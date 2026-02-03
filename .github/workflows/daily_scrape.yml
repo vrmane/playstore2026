@@ -3,7 +3,7 @@ name: Daily Play Store Scrape
 on:
   schedule:
     # Runs at 01:00 UTC every day (D-1 reviews)
-    - cron: '0 1 * * *'
+    - cron: '30 20 * * *'
   workflow_dispatch: # Allows you to run it manually for testing
 
 jobs:
