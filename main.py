@@ -4,7 +4,13 @@ from datetime import datetime, timedelta, timezone
 from google_play_scraper import Sort, reviews
 from google.cloud import bigquery
 
-# The list of apps you provided
+# --- Configuration ---
+PROJECT_ID = 'playstore2026'
+DATASET_ID = 'playstore_data'
+TABLE_NAME = 'app_reviews'
+TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_NAME}"
+LOCATION = 'asia-south1'
+
 APPS = [
     {"name": "MoneyView", "id": "com.whizdm.moneyview.loans"},
     {"name": "KreditBee", "id": "com.kreditbee.android"},
@@ -12,57 +18,78 @@ APPS = [
     {"name": "Fibe", "id": "com.earlysalary.android"}
 ]
 
-PROJECT_ID = 'your-gcp-project-id'
-TABLE_ID = 'your_dataset.play_store_reviews'
-
 def scrape_all_apps():
-    client = bigquery.Client()
+    # Initialize client with the specific Mumbai region
+    client = bigquery.Client(project=PROJECT_ID, location=LOCATION)
+    
+    # Define D-1 (Yesterday) in UTC
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+    print(f"--- Starting Scrape for {yesterday} ---")
+
     all_new_reviews = []
 
     for app in APPS:
-        print(f"Scraping {app['name']}...")
+        print(f"Fetching reviews for {app['name']}...")
         
-        # Scrape latest batch
-        result, _ = reviews(
-            app['id'],
-            lang='en',
-            country='in', # Adjusted to India for these specific apps
-            sort=Sort.NEWEST,
-            count=300
-        )
+        try:
+            # Scrape latest reviews
+            result, _ = reviews(
+                app['id'],
+                lang='en',
+                country='in', 
+                sort=Sort.NEWEST,
+                count=500  # Adjust based on daily volume
+            )
 
-        if not result:
-            continue
+            if not result:
+                continue
 
-        df = pd.DataFrame(result)
-        df['at'] = pd.to_datetime(df['at'])
-        df['app_name'] = app['name'] # Add source app name
-        
-        # Filter 1: Correct Date (D-1)
-        # Filter 2: Length >= 30 chars (to ensure quality)
-        mask = (df['at'].dt.date == yesterday) & (df['content'].str.len() >= 30)
-        df_filtered = df[mask].copy()
-        
-        if not df_filtered.empty:
-            df_filtered['at'] = df_filtered['at'].astype(str)
-            all_new_reviews.append(df_filtered)
+            df = pd.DataFrame(result)
+            df['at'] = pd.to_datetime(df['at'])
+            df['app_name'] = app['name']
+            
+            # Filter for D-1 and quality (length > 30)
+            mask = (df['at'].dt.date == yesterday) & (df['content'].str.len() >= 30)
+            df_filtered = df[mask].copy()
+            
+            if not df_filtered.empty:
+                # Convert timestamp to string for clean BQ ingestion
+                df_filtered['at'] = df_filtered['at'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                all_new_reviews.append(df_filtered)
+                print(f"Found {len(df_filtered)} reviews.")
+            else:
+                print(f"No reviews matched criteria for {app['name']}.")
+
+        except Exception as e:
+            print(f"Error scraping {app['name']}: {e}")
 
     if not all_new_reviews:
-        print(f"No qualifying reviews found for {yesterday}.")
+        print("No new reviews to upload today.")
         return
 
-    # Combine all apps into one upload
+    # Combine data from all apps
     final_df = pd.concat(all_new_reviews, ignore_index=True)
     
+    # BigQuery Load Configuration
     job_config = bigquery.LoadJobConfig(
         write_disposition="WRITE_APPEND",
+        # Explicitly map the 'at' column if autodetect has issues
         autodetect=True,
     )
 
-    job = client.load_table_from_dataframe(final_df, TABLE_ID, job_config=job_config)
-    job.result()
-    print(f"Success! Loaded {len(final_df)} total reviews from {len(all_new_reviews)} apps.")
+    print(f"Uploading {len(final_df)} total reviews to {TABLE_ID}...")
+
+    try:
+        job = client.load_table_from_dataframe(
+            final_df, 
+            TABLE_ID, 
+            job_config=job_config,
+            location=LOCATION
+        )
+        job.result()  # Wait for completion
+        print("Upload successful!")
+    except Exception as e:
+        print(f"BigQuery Upload Failed: {e}")
 
 if __name__ == "__main__":
     scrape_all_apps()
