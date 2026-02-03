@@ -19,16 +19,17 @@ APPS = [
 ]
 
 def trigger_gemini_classification():
-    """Triggers the BQML Gemini model to process any reviews missing from the AI table."""
     client = bigquery.Client(project=PROJECT_ID, location=LOCATION)
     
-    # We use a raw string r""" to handle the long prompt and newlines safely
+    # We now explicitly select CURRENT_TIMESTAMP() for the new column
     sql_query = r"""
-    INSERT INTO `playstore2026.play_store_data.app_reviews_ai` (reviewId, ai_output, processing_timestamp)
+    INSERT INTO `playstore2026.play_store_data.app_reviews_ai` 
+    (reviewId, ai_output, processing_timestamp, ai_processed_timestamp)
     SELECT 
       reviewId, 
       ml_generate_text_llm_result AS ai_output,
-      CURRENT_TIMESTAMP()
+      CURRENT_TIMESTAMP(), -- Existing column
+      CURRENT_TIMESTAMP()  -- New specific processed timestamp
     FROM ML.GENERATE_TEXT(
       MODEL `playstore2026.play_store_data.gemini_flash_model`,
       (
@@ -683,7 +684,7 @@ Output: UPI, Negative, Unable to add bank account
 Example 36
 Statement: “KreditBee. good service fast, so happy with smile service”
 Output: Generic, Positive, Quick/Fast Process]''', 
-          "\nReview: ", content
+ "\nReview: ", content
         ) AS prompt
         FROM `playstore2026.play_store_data.app_reviews` AS raw
         WHERE NOT EXISTS (
