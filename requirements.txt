@@ -1,4 +1,5 @@
 google-play-scraper
-pandas
 google-cloud-bigquery
+pandas
+pytz
 pyarrow
