@@ -6,7 +6,7 @@ from google.cloud import bigquery
 
 # --- Configuration ---
 PROJECT_ID = 'playstore2026'
-DATASET_ID = 'playstore_data'
+DATASET_ID = 'play_store_data'
 TABLE_NAME = 'app_reviews'
 TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_NAME}"
 LOCATION = 'asia-south1'
