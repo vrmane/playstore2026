@@ -1,0 +1,33 @@
+name: Daily Play Store Scrape
+
+on:
+  schedule:
+    # Runs at 01:00 UTC every day (D-1 reviews)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # Allows you to run it manually for testing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Scraper
+        env:
+          # This pulls your GCP Key from GitHub Secrets
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          # Create a temp file for the credentials so the client can find it
+          echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > gcp_key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=gcp_key.json
+          python main.py
